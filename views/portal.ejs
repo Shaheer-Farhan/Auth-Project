@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snooker Tables Portal</title>
+  <style>
+    body {
+      font-family: 'Arial', sans-serif;
+      background-color: #0f1e2e;
+      color: white;
+      margin: 0;
+      padding: 20px;
+    }
+
+    h1 {
+      text-align: center;
+      color: #f0f0f0;
+      margin-bottom: 30px;
+    }
+
+    .tables-container {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .table-box {
+      background-color: #1e3a56;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+      text-align: center;
+      transition: transform 0.3s;
+    }
+
+    .table-box:hover {
+      transform: translateY(-5px);
+    }
+
+    .table-img {
+      width: 100%;
+      height: 160px;
+      object-fit: cover;
+      border-radius: 10px;
+    }
+
+    .table-title {
+      font-size: 22px;
+      font-weight: bold;
+      margin-top: 10px;
+      color: #f39c12;
+    }
+
+    .rate {
+      color: #2ecc71;
+      font-size: 16px;
+    }
+
+    .timer {
+      font-family: 'Courier New', monospace;
+      font-size: 26px;
+      color: #00ff99;
+      margin: 10px 0;
+    }
+
+    .player-input {
+      margin-top: 10px;
+    }
+
+    .player-name {
+      font-size: 18px;
+      color: #ffffff;
+      margin-top: 10px;
+    }
+
+    button {
+      padding: 8px 18px;
+      font-size: 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      margin: 5px;
+      color: white;
+      transition: background-color 0.3s;
+    }
+
+    .start { background-color: #2ecc71; }
+    .start:hover { background-color: #27ae60; }
+
+    .pause { background-color: #f39c12; }
+    .pause:hover { background-color: #d68910; }
+
+    .finish { background-color: #e74c3c; }
+    .finish:hover { background-color: #c0392b; }
+
+    @media (max-width: 700px) {
+      .tables-container { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Snooker Tables Management</h1>
+
+  <div class="tables-container">
+    <% snookerTables.forEach((table) => { %>
+      <div class="table-box" id="table-<%= table.tableNumber %>">
+        <img src="../public/image/table.webp" alt="Snooker Table" class="table-img" />
+        <div class="table-title">Snooker #<%= table.tableNumber %></div>
+        <div class="rate">Rs 14 / minute</div>
+        <div class="timer" id="timer-<%= table.tableNumber %>">00:00:00</div>
+
+        <div class="player-input" id="input-<%= table.tableNumber %>">
+          <input type="text" id="name-input-<%= table.tableNumber %>" placeholder="Enter Player Name" />
+          <button onclick="saveName(<%= table.tableNumber %>)">Save</button>
+        </div>
+
+        <div class="player-name" id="name-display-<%= table.tableNumber %>"></div>
+
+        <button class="start" onclick="startTimer(<%= table.tableNumber %>)">Start</button>
+        <button class="pause" onclick="pauseTimer(<%= table.tableNumber %>)">Pause</button>
+        <button class="finish" onclick="finishTimer(<%= table.tableNumber %>)">Finish</button>
+      </div>
+    <% }) %>
+  </div>
+
+  <script>
+    const snookerTables = <%- JSON.stringify(snookerTables) %>;
+    const pricePerMinute = 14;
+    const timers = {};  // stores local intervals and syncs
+
+    // save player name
+    function saveName(tableNumber) {
+      const input = document.getElementById(`name-input-${tableNumber}`);
+      const nameDisplay = document.getElementById(`name-display-${tableNumber}`);
+      const nameContainer = document.getElementById(`input-${tableNumber}`);
+      const playerName = input.value.trim();
+      if (!playerName) return alert("Enter a valid name!");
+      nameDisplay.innerText = `Player: ${playerName}`;
+      nameContainer.style.display = "none";
+      // you can save name to DB if needed
+    }
+
+    async function startTimer(tableNumber) {
+      const table = snookerTables.find(t => t.tableNumber === tableNumber);
+      if (!table) return;
+
+      const nameDisplay = document.getElementById(`name-display-${tableNumber}`);
+      const nameInput = document.getElementById(`input-${tableNumber}`);
+
+      // if name not entered yet, show input
+      if (!nameDisplay.innerText) {
+        nameInput.style.display = "block";
+        return;
+      }
+
+      // mark as running in DB
+      await fetch(`/api/tables/start/${tableNumber}`, { method: "POST" });
+
+      table.isRunning = true;
+      timers[tableNumber] = timers[tableNumber] || { elapsed: table.totalElapsedMinutes * 60 };
+
+      // clear old interval if any
+      clearInterval(timers[tableNumber].interval);
+      timers[tableNumber].interval = setInterval(() => {
+        timers[tableNumber].elapsed++;
+        updateDisplay(tableNumber, timers[tableNumber].elapsed);
+      }, 1000);
+
+      // call backend every 40s to sync timer (resync to real DB time)
+      clearInterval(timers[tableNumber].sync);
+      timers[tableNumber].sync = setInterval(() => syncWithDB(tableNumber), 40000);
+    }
+
+    async function pauseTimer(tableNumber) {
+      const table = snookerTables.find(t => t.tableNumber === tableNumber);
+      if (!table) return;
+      clearInterval(timers[tableNumber]?.interval);
+      clearInterval(timers[tableNumber]?.sync);
+      await fetch(`/api/tables/pause/${tableNumber}`, { method: "POST" });
+      table.isRunning = false;
+    }
+
+    async function finishTimer(tableNumber) {
+      clearInterval(timers[tableNumber]?.interval);
+      clearInterval(timers[tableNumber]?.sync);
+      await fetch(`/api/tables/finish/${tableNumber}`, { method: "POST" });
+      document.getElementById(`name-display-${tableNumber}`).innerText = "";
+      document.getElementById(`input-${tableNumber}`).style.display = "block";
+      document.getElementById(`timer-${tableNumber}`).innerText = "00:00:00";
+    }
+
+    function updateDisplay(tableNumber, elapsedSeconds) {
+      const hours = Math.floor(elapsedSeconds / 3600);
+      const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+      const seconds = elapsedSeconds % 60;
+      document.getElementById(`timer-${tableNumber}`).innerText =
+        `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    async function syncWithDB(tableNumber) {
+      try {
+        const res = await fetch(`/api/tables/${tableNumber}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.isRunning) return;
+        const start = new Date(data.startTime);
+        const diff = Math.floor((new Date() - start) / 1000) + data.totalElapsedMinutes * 60;
+        timers[tableNumber].elapsed = diff;
+        updateDisplay(tableNumber, diff);
+      } catch (e) {
+        console.error("Sync error:", e);
+      }
+    }
+
+    // initialize timers on load
+    window.addEventListener("load", () => {
+      snookerTables.forEach((table) => {
+        const inputDiv = document.getElementById(`input-${table.tableNumber}`);
+        const nameDisplay = document.getElementById(`name-display-${table.tableNumber}`);
+
+        // hide name input if player already exists
+        if (table.playerName) {
+          inputDiv.style.display = "none";
+          nameDisplay.innerText = `Player: ${table.playerName}`;
+        }
+
+        if (table.isRunning && table.startTime) {
+          const diff = Math.floor((new Date() - new Date(table.startTime)) / 1000);
+          timers[table.tableNumber] = { elapsed: table.totalElapsedMinutes * 60 + diff };
+          updateDisplay(table.tableNumber, timers[table.tableNumber].elapsed);
+          startTimer(table.tableNumber); // auto-resume timer if running
+        } else {
+          updateDisplay(table.tableNumber, table.totalElapsedMinutes * 60);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
